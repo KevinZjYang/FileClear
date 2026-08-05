@@ -7,10 +7,14 @@ mod quick_clean;
 mod settings;
 mod types;
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 use tauri::Manager;
 
 /// Parse process arguments: detect `--quick-clean` and collect the file paths
-/// that follow it (Explorer passes selected files via `%*`).
+/// that follow it (Explorer passes the selected file via `%1`).
 pub fn parse_args(args: &[String]) -> (bool, Vec<String>) {
     let mut quick_clean = false;
     let mut paths = Vec::new();
@@ -28,11 +32,30 @@ pub fn parse_args(args: &[String]) -> (bool, Vec<String>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(quick_clean: bool, paths: Vec<String>) {
+    // 记录单实例转发来的待处理清理任务数，headless 退出前会等待它们完成。
+    let pending = Arc::new(AtomicUsize::new(0));
+    // The first instance decides the feedback mode (headless vs. window).
+    // Forwarded quick-clean tasks must use the same mode, otherwise a
+    // multi-file selection could show a message box for one file and a
+    // system notification for the others.
+    let headless = Arc::new(AtomicBool::new(quick_clean));
+
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            let (_, paths) = parse_args(&args);
-            if !paths.is_empty() {
-                tauri::async_runtime::spawn(quick_clean::run(app.clone(), paths));
+        .plugin(tauri_plugin_single_instance::init({
+            let pending = pending.clone();
+            let headless = headless.clone();
+            move |app, args, _cwd| {
+                let (_, paths) = parse_args(&args);
+                if !paths.is_empty() {
+                    pending.fetch_add(1, Ordering::SeqCst);
+                    let pending = pending.clone();
+                    let app = app.clone();
+                    let is_headless = headless.load(Ordering::SeqCst);
+                    tauri::async_runtime::spawn(async move {
+                        quick_clean::run(app, paths, is_headless).await;
+                        pending.fetch_sub(1, Ordering::SeqCst);
+                    });
+                }
             }
         }))
         .plugin(tauri_plugin_notification::init())
@@ -46,8 +69,20 @@ pub fn run(quick_clean: bool, paths: Vec<String>) {
                 // Headless quick-clean: no window, then exit.
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    quick_clean::run(handle.clone(), paths.clone()).await;
-                    handle.exit(0);
+                    quick_clean::run(handle.clone(), paths.clone(), true).await;
+                    // 多选时 Explorer 会逐文件启动进程，其余实例把文件转发给本实例；
+                    // 等转发来的清理任务完成后（最多 30 秒）再退出。
+                    let handle = handle.clone();
+                    let pending = pending.clone();
+                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                        for _ in 0..300 {
+                            if pending.load(Ordering::SeqCst) == 0 {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        handle.exit(0);
+                    });
                 });
             } else if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();

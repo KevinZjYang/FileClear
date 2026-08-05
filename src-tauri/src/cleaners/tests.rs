@@ -334,6 +334,19 @@ fn pdf_info_and_xmp_cleared() {
     let root_dict = resolve_dict(&doc, root).expect("Root 应为字典");
     assert!(root_dict.get(b"Metadata").is_err(), "目录中不得再引用 Metadata");
     assert!(root_dict.get(b"Pages").is_ok(), "页面结构应保留");
+
+    // 不得残留任何 Metadata 类型流对象（含孤立对象），输出文件不含 XMP 字节。
+    assert!(
+        doc.objects
+            .values()
+            .all(|o| !o.type_name().is_ok_and(|n| n == b"Metadata")),
+        "文件中不应残留 XMP Metadata 流对象"
+    );
+    let out_bytes = std::fs::read(&out).unwrap();
+    assert!(
+        !out_bytes.windows(10).any(|w| w == b"<x:xmpmeta"),
+        "输出文件不应包含 XMP 内容"
+    );
 }
 
 #[test]
@@ -435,3 +448,77 @@ fn supported_extensions_dispatched() {
     assert!(!cleaners::is_supported(Path::new("d.txt")));
     assert_eq!(cleaners::extension(Path::new("x.jpeg")), Some(".jpeg"));
 }
+
+/// 完整链路：清洗前软件能读到元数据，clean_in_place 后软件预览不再显示。
+#[test]
+fn cleaned_files_show_no_metadata_in_preview() {
+    let dir = temp_dir();
+
+    let jpg = jpeg_with_exif(dir.path());
+    let before = crate::metadata::read_metadata(&jpg).unwrap();
+    assert!(
+        before.fields.iter().any(|f| f.key.starts_with("EXIF")),
+        "JPEG fixture 应能被预览读到 EXIF，实际：{before:?}"
+    );
+    cleaners::clean_in_place(&jpg).unwrap();
+    let after = crate::metadata::read_metadata(&jpg).unwrap();
+    assert!(
+        !after.fields.iter().any(|f| f.key.starts_with("EXIF")),
+        "JPEG 清洗后不应再显示 EXIF，实际：{after:?}"
+    );
+
+    let png = png_with_text(dir.path());
+    let before = crate::metadata::read_metadata(&png).unwrap();
+    assert!(
+        before.fields.iter().any(|f| f.key.starts_with("PNG")),
+        "PNG fixture 应能被预览读到文本元数据，实际：{before:?}"
+    );
+    cleaners::clean_in_place(&png).unwrap();
+    let after = crate::metadata::read_metadata(&png).unwrap();
+    assert!(
+        !after.fields.iter().any(|f| f.key.starts_with("PNG")),
+        "PNG 清洗后不应再显示文本元数据，实际：{after:?}"
+    );
+
+    let pdf = pdf_with_metadata(dir.path());
+    let before = crate::metadata::read_metadata(&pdf).unwrap();
+    assert!(
+        before.fields.iter().any(|f| f.key.starts_with("PDF")),
+        "PDF fixture 应能被预览读到元数据，实际：{before:?}"
+    );
+    cleaners::clean_in_place(&pdf).unwrap();
+    let after = crate::metadata::read_metadata(&pdf).unwrap();
+    assert!(
+        !after.fields.iter().any(|f| f.key.starts_with("PDF")),
+        "PDF 清洗后不应再显示元数据，实际：{after:?}"
+    );
+
+    let docx = docx_with_metadata(dir.path());
+    let before = crate::metadata::read_metadata(&docx).unwrap();
+    assert!(
+        before.fields.iter().any(|f| f.key.starts_with("核心") || f.key.starts_with("应用")),
+        "docx fixture 应能被预览读到元数据，实际：{before:?}"
+    );
+    cleaners::clean_in_place(&docx).unwrap();
+    let after = crate::metadata::read_metadata(&docx).unwrap();
+    assert!(
+        !after.fields.iter().any(|f| f.key.starts_with("核心") || f.key.starts_with("应用")),
+        "docx 清洗后不应再显示元数据，实际：{after:?}"
+    );
+
+    let doc = legacy_doc_with_summary(dir.path());
+    let before = crate::metadata::read_metadata(&doc).unwrap();
+    assert!(
+        before.fields.iter().any(|f| f.key.starts_with("摘要") || f.key.starts_with("文档摘要")),
+        "doc fixture 应能被预览读到元数据，实际：{before:?}"
+    );
+    cleaners::clean_in_place(&doc).unwrap();
+    let after = crate::metadata::read_metadata(&doc).unwrap();
+    assert!(
+        !after.fields.iter().any(|f| f.key.starts_with("摘要") || f.key.starts_with("文档摘要")),
+        "doc 清洗后不应再显示元数据，实际：{after:?}"
+    );
+}
+
+
+

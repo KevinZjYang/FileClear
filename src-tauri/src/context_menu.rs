@@ -16,7 +16,9 @@ pub fn register() -> Result<(), String> {
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_str = exe.to_string_lossy().to_string();
-    let command = format!("\"{exe_str}\" --quick-clean %*");
+    // 注意：HKCU 下资源管理器不会展开 %*，必须用带引号的 %1；
+    // MultiSelectModel=Single 让多选时逐文件调用（否则只取第一个文件）。
+    let command = format!("\"{exe_str}\" --quick-clean \"%1\"");
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (shell_key, _) = hkcu
@@ -25,6 +27,9 @@ pub fn register() -> Result<(), String> {
     shell_key.set_value("", &MENU_LABEL).map_err(|e| e.to_string())?;
     shell_key
         .set_value("Icon", &exe_str)
+        .map_err(|e| e.to_string())?;
+    shell_key
+        .set_value("MultiSelectModel", &"Single")
         .map_err(|e| e.to_string())?;
     let (command_key, _) = shell_key
         .create_subkey("command")

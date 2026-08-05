@@ -30,6 +30,7 @@ tempfile = "3.27.0"
 thiserror = "2.0.19"
 chrono = "0.4.45"
 kamadak_exif = { package = "kamadak-exif", version = "0.6.1" }
+rfd = "0.16.0"
 
 [target."cfg(windows)".dependencies]
 winreg = "0.56.0"

@@ -31,9 +31,10 @@ pub fn set_context_menu_enabled(app: &AppHandle, enabled: bool) -> Result<(), St
 }
 
 /// Called on every startup: ensure the context menu matches the saved setting.
+/// 总是重写注册表（幂等），可自动修复旧版本 %* 命令或过期 exe 路径。
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let settings = load(app)?;
-    if settings.context_menu_enabled && !crate::context_menu::is_registered() {
+    if settings.context_menu_enabled {
         let _ = crate::context_menu::register();
     }
     Ok(())
